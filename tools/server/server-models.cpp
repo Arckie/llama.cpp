@@ -246,7 +246,7 @@ server_models::server_models(
             if (total > 0) {
                 const uint64_t available = (free > memory_margin) ? free - memory_margin : 0;
                 available_memory_per_device[dev] = available;
-                SRV_DBG("device %s: available memory after margin=%lu MB\n",
+                SRV_DBG("device %s: available memory after margin=%lu MiB\n",
                     ggml_backend_dev_name(dev),
                     (unsigned long)(available / (1024 * 1024)));
             }
@@ -781,11 +781,11 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
-uint64_t server_models::get_memory_exceeded(const model_memory_map& new_model_memory_per_device) const {
+uint64_t server_models::get_memory_exceeded(const model_memory_map & new_model_memory_per_device) const {
     model_memory_map total_memory_per_device;
     for (const auto & m : mapping) {
         if (m.second.meta.is_running()) {
-            for (const auto& [key, value] : m.second.meta.memory_usage_per_device) {
+            for (const auto & [key, value] : m.second.meta.memory_usage_per_device) {
                 total_memory_per_device[key] += value;
             }
         }
@@ -796,9 +796,9 @@ uint64_t server_models::get_memory_exceeded(const model_memory_map& new_model_me
         return it != m.end() ? it->second : 0;
     };
 
-    uint64_t memory_exceeded = 0;
+    size_t count_memory_exceeded = 0;
 
-    for (const auto& [key, limit] : available_memory_per_device) {
+    for (const auto & [key, limit] : available_memory_per_device) {
         const uint64_t total_memory = get(total_memory_per_device, key);
         const uint64_t new_memory = get(new_model_memory_per_device, key);
         SRV_DBG("device %s: total=%lu MB, new=%lu MB, limit=%lu MB\n",
@@ -808,14 +808,14 @@ uint64_t server_models::get_memory_exceeded(const model_memory_map& new_model_me
             (unsigned long)(limit / (1024 * 1024)));
 
         if (total_memory + new_memory > limit) {
-            memory_exceeded++;
+            count_memory_exceeded++;
         }
     }
 
-    return memory_exceeded;
+    return count_memory_exceeded;
 }
 
-void server_models::unload_lru(const model_memory_map& new_model_memory_per_device) {
+void server_models::unload_lru(const model_memory_map & new_model_memory_per_device) {
     const bool check_memory = base_params.models_memory_margin > 0 && !available_memory_per_device.empty();
 
     if (base_params.models_max <= 0 && !check_memory) {
@@ -826,7 +826,7 @@ void server_models::unload_lru(const model_memory_map& new_model_memory_per_devi
         std::string lru_model_name = "";
         int64_t lru_last_used = ggml_time_ms();
         size_t count_active = 0;
-        uint64_t memory_exceeded = 0;
+        size_t count_memory_exceeded = 0;
         {
             std::unique_lock<std::mutex> lk(mutex);
             for (const auto & m : mapping) {
@@ -838,14 +838,14 @@ void server_models::unload_lru(const model_memory_map& new_model_memory_per_devi
                     }
                 }
             }
-            memory_exceeded = get_memory_exceeded(new_model_memory_per_device);
+            count_memory_exceeded = get_memory_exceeded(new_model_memory_per_device);
         }
         bool count_exceeded = base_params.models_max > 0 &&
                               (count_active + 1) > (size_t)base_params.models_max;
 
-        if (!lru_model_name.empty() && (count_exceeded || memory_exceeded > 0)) {
+        if (!lru_model_name.empty() && (count_exceeded || count_memory_exceeded > 0)) {
             SRV_INF("limits reached (count=%zu, memory margin exceeded on %zu device(s)), removing LRU name=%s\n",
-                    count_active, memory_exceeded,  lru_model_name.c_str());
+                    count_active, count_memory_exceeded,  lru_model_name.c_str());
             unload(lru_model_name);
             // wait for unload to complete
             {

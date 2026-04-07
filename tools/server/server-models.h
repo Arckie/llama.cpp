@@ -132,12 +132,12 @@ private:
     common_preset base_preset; // base preset from llama-server CLI args
 
     // available memory per device
-    std::map<ggml_backend_dev_t, uint64_t> available_memory_per_device;
+    model_memory_map available_memory_per_device;
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
-    void unload_lru(const model_memory_map& new_model_memory_per_device);
+    void unload_lru(const model_memory_map & new_model_memory_per_device);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
@@ -146,7 +146,7 @@ private:
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
     // not thread-safe, caller must hold mutex
-    uint64_t get_memory_exceeded(const model_memory_map& new_model_memory_per_device) const;
+    uint64_t get_memory_exceeded(const model_memory_map & new_model_memory_per_device) const;
 
 public:
     server_models(const common_params & params, int argc, char ** argv);
