@@ -7,6 +7,7 @@
 #include "server-http.h"
 #include "server-queue.h"
 
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
 #include <functional>
@@ -118,6 +119,13 @@ private:
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
 
+    // background tasks for download/estimate/load pipelines, keyed by model name
+    struct bg_task {
+        std::thread th;
+        std::atomic<bool> done{false};
+    };
+    std::map<std::string, std::unique_ptr<bg_task>> bg_tasks;
+
     // set to true while load_models() is executing a reload; load() will wait until clear
     bool is_reloading = false;
 
@@ -154,6 +162,12 @@ private:
     // not thread-safe, caller must hold mutex
     bool limits_exceeded(const buft_memory_map & bmm_req) const;
 
+    // estimate model memory by spawning a child process with --measure-only
+    // returns the buft memory map, or empty map on failure (caller must NOT hold mutex)
+    buft_memory_map estimate_model_memory(const std::string & name);
+
+    // join and remove completed background tasks
+    void join_completed_bg_tasks();
 public:
     server_models(const common_params & params, int argc, char ** argv);
 
