@@ -61,7 +61,7 @@ static std::string server_model_source_to_string(server_model_source source) {
     }
 }
 
-using device_memory_map = std::map<ggml_backend_dev_t, size_t>;
+using buft_memory_map = std::map<ggml_backend_buffer_type_t, size_t>;
 
 struct server_model_meta {
     server_model_source source = SERVER_MODEL_SOURCE_CACHE;
@@ -72,7 +72,7 @@ struct server_model_meta {
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
-    device_memory_map dmm_req; // bytes required per device
+    buft_memory_map bmm_req; // bytes required per buffer type
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     json loaded_info; // info to be reflected via /v1/models endpoint ; if in DOWNLOADING state, it should contain download progress info
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
@@ -131,13 +131,13 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
-    // available memory per device
-    device_memory_map dmm_available;
+    // available memory per buffer type
+    buft_memory_map bmm_available;
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
-    void unload_lru(const device_memory_map & dmm_req);
+    void unload_lru(const buft_memory_map & bmm_req);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
@@ -145,10 +145,10 @@ private:
     // notify SSE clients
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
-    // return number of devices where the memory limit would be exceeded
-    // return 0 if the new model would fit on all devices
+    // return number of buffer types where the memory limit would be exceeded
+    // return 0 if the new model would fit
     // not thread-safe, caller must hold mutex
-    int can_fit(const device_memory_map & dmm_req) const;
+    int can_fit(const buft_memory_map & bmm_req) const;
 
 public:
     server_models(const common_params & params, int argc, char ** argv);

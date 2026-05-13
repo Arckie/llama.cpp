@@ -96,7 +96,11 @@ LLAMA_API uint64_t llama_context_device_memory(
         const struct llama_context * ctx,
         ggml_backend_dev_t           device);
 
-// Set whether the context outputs nextn embeddings or not
+//
+// pre-norm embeddings (hidden state before the final output norm)
+//
+
+// Set whether the context outputs pre-norm embeddings or not
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
 LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);

@@ -245,10 +245,11 @@ server_models::server_models(
             size_t free, total;
             ggml_backend_dev_memory(dev, &free, &total);
             if (total > 0) {
+                ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
                 const size_t available = (free > memory_margin) ? free - memory_margin : 0;
-                dmm_available[dev] = available;
-                SRV_DBG("device %s: available memory after margin=%zu MiB\n",
-                    ggml_backend_dev_name(dev), available / (1024 * 1024));
+                bmm_available[buft] = available;
+                SRV_DBG("buft %s: available memory after margin=%zu MiB\n",
+                    ggml_backend_buft_name(buft), available / (1024 * 1024));
             }
         }
     }
@@ -432,20 +433,20 @@ void server_models::load_models() {
         // FIRST LOAD: add all models, then unlock for autoloading
         for (const auto & [name, preset] : final_presets) {
             server_model_meta meta{
-                /* source           */ get_source(name),
-                /* preset           */ preset,
-                /* name             */ name,
-                /* aliases          */ {},
-                /* tags             */ {},
-                /* port             */ 0,
-                /* status           */ SERVER_MODEL_STATUS_UNLOADED,
-                /* last_used        */ 0,
-                /* memory_per_device */ {},
-                /* args             */ std::vector<std::string>(),
-                /* loaded_info      */ {},
-                /* exit_code        */ 0,
-                /* stop_timeout     */ DEFAULT_STOP_TIMEOUT,
-                /* multimodal       */ mtmd_caps{false, false},
+                /* source        */ get_source(name),
+                /* preset        */ preset,
+                /* name          */ name,
+                /* aliases       */ {},
+                /* tags          */ {},
+                /* port          */ 0,
+                /* status        */ SERVER_MODEL_STATUS_UNLOADED,
+                /* last_used     */ 0,
+                /* bmm_req       */ {},
+                /* args          */ std::vector<std::string>(),
+                /* loaded_info   */ {},
+                /* exit_code     */ 0,
+                /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
+                /* multimodal    */ mtmd_caps{false, false},
                 // /* need_download */ false,
             };
             add_model(std::move(meta));
@@ -599,20 +600,20 @@ void server_models::load_models() {
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
-                    /* source           */ get_source(name),
-                    /* preset           */ preset,
-                    /* name             */ name,
-                    /* aliases          */ {},
-                    /* tags             */ {},
-                    /* port             */ 0,
-                    /* status           */ SERVER_MODEL_STATUS_UNLOADED,
-                    /* last_used        */ 0,
-                    /* memory_per_device */ {},
-                    /* args             */ std::vector<std::string>(),
-                    /* loaded_info      */ {},
-                    /* exit_code        */ 0,
-                    /* stop_timeout     */ DEFAULT_STOP_TIMEOUT,
-                    /* multimodal       */ mtmd_caps{false, false},
+                    /* source        */ get_source(name),
+                    /* preset        */ preset,
+                    /* name          */ name,
+                    /* aliases       */ {},
+                    /* tags          */ {},
+                    /* port          */ 0,
+                    /* status        */ SERVER_MODEL_STATUS_UNLOADED,
+                    /* last_used     */ 0,
+                    /* bmm_req       */ {},
+                    /* args          */ std::vector<std::string>(),
+                    /* loaded_info   */ {},
+                    /* exit_code     */ 0,
+                    /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
+                    /* multimodal    */ mtmd_caps{false, false},
                     // /* need_download */ false,
                 };
                 add_model(std::move(meta));
@@ -781,29 +782,29 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
-int server_models::can_fit(const device_memory_map & dmm_req) const {
-    device_memory_map dmm_total;
+int server_models::can_fit(const buft_memory_map & bmm_req) const {
+    buft_memory_map bmm_total;
     for (const auto & m : mapping) {
         if (m.second.meta.is_running()) {
-            for (const auto & [dev, mem] : m.second.meta.dmm_req) {
-                dmm_total[dev] += mem;
+            for (const auto & [buft, mem] : m.second.meta.bmm_req) {
+                bmm_total[buft] += mem;
             }
         }
     }
 
-    auto get = [](const device_memory_map & dmm, ggml_backend_dev_t dev) {
-        auto it = dmm.find(dev);
+    auto get = [](const buft_memory_map & dmm, ggml_backend_buffer_type_t buft) -> size_t {
+        auto it = dmm.find(buft);
         return it != dmm.end() ? it->second : 0;
     };
 
     int res = 0;
 
-    for (const auto & [dev, limit] : dmm_available) {
-        const size_t mem_total = get(dmm_total, dev);
-        const size_t mem_new   = get(dmm_req,   dev);
+    for (const auto & [buft, limit] : bmm_available) {
+        const size_t mem_total = get(bmm_total, buft);
+        const size_t mem_new   = get(bmm_req,   buft);
 
-        SRV_DBG("device %s: total=%zu MiB, new=%zu MiB, limit=%zu MiB\n",
-            ggml_backend_dev_name(dev),
+        SRV_DBG("buft %s: total=%zu MiB, new=%zu MiB, limit=%zu MiB\n",
+            ggml_backend_buft_name(buft),
             mem_total / (1024 * 1024), mem_new / (1024 * 1024), limit / (1024 * 1024));
 
         if (mem_total + mem_new > limit) {
@@ -814,7 +815,7 @@ int server_models::can_fit(const device_memory_map & dmm_req) const {
     return res;
 }
 
-void server_models::unload_lru(const device_memory_map & dmm_req) {
+void server_models::unload_lru(const buft_memory_map & bmm_req) {
     const bool check_active = base_params.models_max > 0;
     const bool check_memory = base_params.models_memory_margin > 0;
 
@@ -823,7 +824,7 @@ void server_models::unload_lru(const device_memory_map & dmm_req) {
     }
 
     if (check_memory) {
-        GGML_ASSERT(!dmm_available.empty());
+        GGML_ASSERT(!bmm_available.empty());
     }
 
     while (true) {
@@ -844,7 +845,7 @@ void server_models::unload_lru(const device_memory_map & dmm_req) {
                 }
             }
             if (check_memory) {
-                count_exceed = can_fit(dmm_req);
+                count_exceed = can_fit(bmm_req);
             }
         }
 
@@ -852,7 +853,7 @@ void server_models::unload_lru(const device_memory_map & dmm_req) {
         const bool memory_exceeded = check_memory && count_exceed > 0;
 
         if (!lru_model_name.empty() && (active_exceeded || memory_exceeded)) {
-            SRV_INF("limits reached (count=%d, memory margin exceeded on %d device(s)), removing LRU name=%s\n",
+            SRV_INF("limits reached (count=%d, memory margin exceeded on %d buft(s)), removing LRU name=%s\n",
                     count_active, count_exceed, lru_model_name.c_str());
             unload(lru_model_name);
             // wait for unload to complete
@@ -868,7 +869,7 @@ void server_models::unload_lru(const device_memory_map & dmm_req) {
     }
 }
 
-static device_memory_map get_model_memory_per_device(const common_preset & preset) {
+static buft_memory_map get_model_memory_per_buft(const common_preset & preset) {
     common_params params;
     preset.apply_to_params(params);
 
@@ -912,13 +913,11 @@ static device_memory_map get_model_memory_per_device(const common_preset & prese
         return {};
     }
 
-    device_memory_map result;
-    const size_t n_devs = ggml_backend_dev_count();
-    for (size_t i = 0; i < n_devs; i++) {
-        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        uint64_t bytes = llama_context_device_memory(ctx.get(), dev);
-        if (bytes > 0) {
-            result[dev] = bytes;
+    buft_memory_map result;
+    for (const auto & [buft, data] : llama_get_memory_breakdown(ctx.get())) {
+        size_t total = data.total();
+        if (total > 0) {
+            result[buft] = total;
         }
     }
 
@@ -930,19 +929,19 @@ void server_models::load(const std::string & name) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
 
-    device_memory_map dmm_req;
+    buft_memory_map bmm_req;
     if (base_params.models_memory_margin > 0) {
         // determine the required memory by the model upon its first load
         std::lock_guard<std::mutex> lk(mutex);
         auto & meta = mapping[name].meta;
-        if (meta.dmm_req.empty()) {
-            meta.dmm_req = get_model_memory_per_device(meta.preset);
+        if (meta.bmm_req.empty()) {
+            meta.bmm_req = get_model_memory_per_buft(meta.preset);
         }
 
-        dmm_req = meta.dmm_req;
+        bmm_req = meta.bmm_req;
     }
 
-    unload_lru(dmm_req);
+    unload_lru(bmm_req);
 
     std::unique_lock<std::mutex> lk(mutex);
     // edge case: block until any in-progress reload has finished so we always load
@@ -972,7 +971,7 @@ void server_models::load(const std::string & name) {
             }
 
             const bool active_exceeded = check_active && count_active >= base_params.models_max;
-            const bool memory_exceeded = check_memory && can_fit(dmm_req) > 0;
+            const bool memory_exceeded = check_memory && can_fit(bmm_req) > 0;
 
             if (active_exceeded || memory_exceeded) {
                 throw std::runtime_error("model limit reached, try again later");
