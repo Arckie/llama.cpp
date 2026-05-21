@@ -1064,7 +1064,6 @@ void server_models::load(const std::string & name) {
             std::vector<char> vec_buf(128 * 1024); // large buffer for storing info
             char * buffer = vec_buf.data();
             if (stdout_file) {
-                bool ready_received = false;
                 while (fgets(buffer, vec_buf.size(), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
                     std::string str(buffer);
