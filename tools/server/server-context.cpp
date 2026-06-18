@@ -4245,6 +4245,57 @@ void server_routes::init_routes() {
         return res;
     };
 
+    this->get_local_ai_kv_cache = [this](const server_http_req & req) {
+        auto res = create_response();
+        if (params.slot_save_path.empty()) {
+            res->error(format_error_response("This server does not support KV cache export. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        int id_slot;
+        try {
+            id_slot = std::stoi(req.get_param("id_slot"));
+        } catch (const std::exception &) {
+            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        return handle_local_ai_kv_cache_export(req, id_slot);
+    };
+
+    this->post_local_ai_kv_cache = [this](const server_http_req & req) {
+        auto res = create_response();
+        if (params.slot_save_path.empty()) {
+            res->error(format_error_response("This server does not support KV cache import. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        int id_slot;
+        try {
+            id_slot = std::stoi(req.get_param("id_slot"));
+        } catch (const std::exception &) {
+            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        return handle_local_ai_kv_cache_import(req, id_slot);
+    };
+
+    this->delete_local_ai_kv_cache = [this](const server_http_req & req) {
+        auto res = create_response();
+        if (params.slot_save_path.empty()) {
+            res->error(format_error_response("This server does not support KV cache erase. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        int id_slot;
+        try {
+            id_slot = std::stoi(req.get_param("id_slot"));
+        } catch (const std::exception &) {
+            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        return handle_slots_erase(req, id_slot);
+    };
+
     this->get_props = [this](const server_http_req &) {
         auto res = create_response(true);
 
@@ -4921,6 +4972,63 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
     GGML_ASSERT(dynamic_cast<server_task_result_slot_erase*>(result.get()) != nullptr);
     res->ok(result->to_json());
     return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_export(const server_http_req & req, int id_slot) {
+    auto res = create_response();
+    std::string filename = req.get_param("filename", "local-ai-slot-" + std::to_string(id_slot) + ".bin");
+    if (!fs_validate_filename(filename)) {
+        res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    server_http_req save_req = req;
+    save_req.body = json({{"filename", filename}}).dump();
+    auto save_res = handle_slots_save(save_req, id_slot);
+    if (save_res->status != 200) {
+        return save_res;
+    }
+
+    std::string filepath = params.slot_save_path + filename;
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.good()) {
+        res->error(format_error_response("KV cache file was not created", ERROR_TYPE_SERVER));
+        return res;
+    }
+
+    res->data.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    res->content_type = "application/octet-stream";
+    res->headers["X-Local-AI-KV-Cache-Filename"] = filename;
+    res->headers["X-Local-AI-KV-Cache-Size"] = std::to_string(res->data.size());
+    res->status = 200;
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_import(const server_http_req & req, int id_slot) {
+    auto res = create_response();
+    std::string filename = req.get_param("filename", "local-ai-slot-" + std::to_string(id_slot) + ".bin");
+    if (!fs_validate_filename(filename)) {
+        res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if (req.body.empty()) {
+        res->error(format_error_response("KV cache import body is empty", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    std::string filepath = params.slot_save_path + filename;
+    {
+        std::ofstream file(filepath, std::ios::binary);
+        file.write(req.body.data(), req.body.size());
+        if (!file.good()) {
+            res->error(format_error_response("Failed to write KV cache import file", ERROR_TYPE_SERVER));
+            return res;
+        }
+    }
+
+    server_http_req restore_req = req;
+    restore_req.body = json({{"filename", filename}}).dump();
+    return handle_slots_restore(restore_req, id_slot);
 }
 
 std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(const server_http_req & req, task_response_type res_type) {
