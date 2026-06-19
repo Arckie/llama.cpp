@@ -4251,14 +4251,7 @@ void server_routes::init_routes() {
             return res;
         }
 
-        int id_slot;
-        try {
-            id_slot = std::stoi(req.get_param("id_slot"));
-        } catch (const std::exception &) {
-            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        return handle_local_ai_kv_cache_export(req, id_slot);
+        return handle_local_ai_kv_cache_export(req, 0);
     };
 
     this->post_local_ai_kv_cache = [this](const server_http_req & req) {
@@ -4268,14 +4261,7 @@ void server_routes::init_routes() {
             return res;
         }
 
-        int id_slot;
-        try {
-            id_slot = std::stoi(req.get_param("id_slot"));
-        } catch (const std::exception &) {
-            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        return handle_local_ai_kv_cache_import(req, id_slot);
+        return handle_local_ai_kv_cache_import(req, 0);
     };
 
     this->delete_local_ai_kv_cache = [this](const server_http_req & req) {
@@ -4285,14 +4271,7 @@ void server_routes::init_routes() {
             return res;
         }
 
-        int id_slot;
-        try {
-            id_slot = std::stoi(req.get_param("id_slot"));
-        } catch (const std::exception &) {
-            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        return handle_local_ai_kv_cache_delete(req, id_slot);
+        return handle_local_ai_kv_cache_delete(req, 0);
     };
 
     this->get_local_ai_medium_memory = [this](const server_http_req & req) {
@@ -4990,6 +4969,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
 }
 
 std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_export(const server_http_req & req, int id_slot) {
+    id_slot = 0;
     auto res = create_response();
     std::string filename = req.get_param("filename", "local-ai-slot-" + std::to_string(id_slot) + ".bin");
     if (!fs_validate_filename(filename)) {
@@ -5036,6 +5016,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_ex
 }
 
 std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_import(const server_http_req & req, int id_slot) {
+    id_slot = 0;
     auto res = create_response();
     std::string filename = req.get_param("filename", "local-ai-slot-" + std::to_string(id_slot) + ".bin");
     if (!fs_validate_filename(filename)) {
@@ -5073,6 +5054,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_im
 }
 
 std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_delete(const server_http_req & req, int id_slot) {
+    id_slot = 0;
     auto erase_res = handle_slots_erase(req, id_slot);
     if (erase_res->status != 200) {
         return erase_res;
