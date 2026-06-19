@@ -9,7 +9,11 @@
 #include <vector>
 
 #if defined(LOCAL_AI_STUDIO_SQLITE)
+#if defined(LOCAL_AI_STUDIO_WINSQLITE)
+#include <winsqlite/winsqlite3.h>
+#else
 #include <sqlite3.h>
+#endif
 #endif
 
 namespace local_ai_memory {
