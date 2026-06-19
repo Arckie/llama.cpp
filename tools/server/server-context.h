@@ -146,6 +146,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_local_ai_kv_cache_export(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_local_ai_kv_cache_import(const server_http_req & req, int id_slot);
+    std::unique_ptr<server_res_generator> handle_local_ai_kv_cache_delete(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
     std::unique_ptr<server_res_generator> handle_count_tokens(const llama_vocab * vocab, mtmd_context * mctx, const server_http_req & req, task_response_type res_type);
 

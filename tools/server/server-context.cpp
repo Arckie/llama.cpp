@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <utility>
 #include <fstream>
+#include <ctime>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -36,6 +37,50 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+static std::string local_ai_kv_cache_db_path(const common_params & params) {
+    return params.slot_save_path + "local-ai-kv-cache.db.jsonl";
+}
+
+static int64_t local_ai_unix_time() {
+    return static_cast<int64_t>(std::time(nullptr));
+}
+
+static void local_ai_kv_cache_db_append(
+        const common_params & params,
+        const std::string & event,
+        int id_slot,
+        const std::string & filename,
+        size_t size_bytes) {
+    if (params.slot_save_path.empty()) {
+        return;
+    }
+    json record = {
+        {"event", event},
+        {"id_slot", id_slot},
+        {"filename", filename},
+        {"size_bytes", size_bytes},
+        {"updated_at_unix", local_ai_unix_time()},
+    };
+    std::ofstream db(local_ai_kv_cache_db_path(params), std::ios::app);
+    if (db.good()) {
+        db << record.dump() << "\n";
+    }
+}
+
+static json local_ai_kv_cache_metadata(const common_params & params, int id_slot, const std::string & filename) {
+    std::string filepath = params.slot_save_path + filename;
+    bool exists = std::filesystem::exists(filepath);
+    uintmax_t size_bytes = exists ? std::filesystem::file_size(filepath) : 0;
+    return {
+        {"id_slot", id_slot},
+        {"filename", filename},
+        {"exists", exists},
+        {"size_bytes", size_bytes},
+        {"db_path", local_ai_kv_cache_db_path(params)},
+        {"updated_at_unix", local_ai_unix_time()},
+    };
+}
 
 static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
@@ -4293,7 +4338,7 @@ void server_routes::init_routes() {
             res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        return handle_slots_erase(req, id_slot);
+        return handle_local_ai_kv_cache_delete(req, id_slot);
     };
 
     this->get_props = [this](const server_http_req &) {
@@ -4981,6 +5026,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_ex
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
+    if (req.get_param("metadata") == "1") {
+        res->ok(local_ai_kv_cache_metadata(params, id_slot, filename));
+        return res;
+    }
 
     server_http_req save_req = req;
     save_req.body = json({{"filename", filename}}).dump();
@@ -4990,6 +5039,17 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_ex
     }
 
     std::string filepath = params.slot_save_path + filename;
+    if (req.get_param("store") == "1") {
+        if (!std::filesystem::exists(filepath)) {
+            res->error(format_error_response("KV cache file was not created", ERROR_TYPE_SERVER));
+            return res;
+        }
+        uintmax_t size_bytes = std::filesystem::file_size(filepath);
+        local_ai_kv_cache_db_append(params, "stored", id_slot, filename, static_cast<size_t>(size_bytes));
+        res->ok(local_ai_kv_cache_metadata(params, id_slot, filename));
+        return res;
+    }
+
     std::ifstream file(filepath, std::ios::binary);
     if (!file.good()) {
         res->error(format_error_response("KV cache file was not created", ERROR_TYPE_SERVER));
@@ -5000,7 +5060,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_ex
     res->content_type = "application/octet-stream";
     res->headers["X-Local-AI-KV-Cache-Filename"] = filename;
     res->headers["X-Local-AI-KV-Cache-Size"] = std::to_string(res->data.size());
+    res->headers["X-Local-AI-KV-Cache-DB"] = local_ai_kv_cache_db_path(params);
     res->status = 200;
+    local_ai_kv_cache_db_append(params, "exported", id_slot, filename, res->data.size());
     return res;
 }
 
@@ -5011,24 +5073,69 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_im
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-    if (req.body.empty()) {
+    bool restore_existing = req.get_param("restore") == "1";
+    if (req.body.empty() && !restore_existing) {
         res->error(format_error_response("KV cache import body is empty", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
 
     std::string filepath = params.slot_save_path + filename;
-    {
+    if (!req.body.empty()) {
         std::ofstream file(filepath, std::ios::binary);
         file.write(req.body.data(), req.body.size());
         if (!file.good()) {
             res->error(format_error_response("Failed to write KV cache import file", ERROR_TYPE_SERVER));
             return res;
         }
+        local_ai_kv_cache_db_append(params, "imported", id_slot, filename, req.body.size());
+    } else if (!std::filesystem::exists(filepath)) {
+        res->error(format_error_response("KV cache file does not exist", ERROR_TYPE_INVALID_REQUEST));
+        return res;
     }
 
     server_http_req restore_req = req;
     restore_req.body = json({{"filename", filename}}).dump();
-    return handle_slots_restore(restore_req, id_slot);
+    auto restore_res = handle_slots_restore(restore_req, id_slot);
+    if (restore_res->status == 200) {
+        size_t size_bytes = std::filesystem::exists(filepath) ? static_cast<size_t>(std::filesystem::file_size(filepath)) : req.body.size();
+        local_ai_kv_cache_db_append(params, "restored", id_slot, filename, size_bytes);
+    }
+    return restore_res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_delete(const server_http_req & req, int id_slot) {
+    auto erase_res = handle_slots_erase(req, id_slot);
+    if (erase_res->status != 200) {
+        return erase_res;
+    }
+
+    std::string filename = req.get_param("filename", "");
+    bool file_deleted = false;
+    uintmax_t size_bytes = 0;
+    if (!filename.empty()) {
+        if (!fs_validate_filename(filename)) {
+            erase_res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
+            return erase_res;
+        }
+        std::string filepath = params.slot_save_path + filename;
+        if (std::filesystem::exists(filepath)) {
+            size_bytes = std::filesystem::file_size(filepath);
+            file_deleted = std::filesystem::remove(filepath);
+        }
+        local_ai_kv_cache_db_append(params, "deleted", id_slot, filename, static_cast<size_t>(size_bytes));
+    } else {
+        local_ai_kv_cache_db_append(params, "erased", id_slot, "", 0);
+    }
+
+    json body = json::parse(erase_res->data, nullptr, false);
+    if (body.is_discarded()) {
+        body = json::object();
+    }
+    body["filename"] = filename;
+    body["file_deleted"] = file_deleted;
+    body["db_path"] = local_ai_kv_cache_db_path(params);
+    erase_res->ok(body);
+    return erase_res;
 }
 
 std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(const server_http_req & req, task_response_type res_type) {
