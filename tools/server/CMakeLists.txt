@@ -1,5 +1,7 @@
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
+option(LOCAL_AI_STUDIO_SQLITE "local-ai-studio: store local memory metadata in SQLite" ON)
+
 # server-context containing the core server logic, used by llama-server and CLI
 
 set(TARGET server-context)
@@ -15,6 +17,8 @@ add_library(${TARGET} STATIC
     server-common.h
     server-context.cpp
     server-context.h
+    local-ai-memory.cpp
+    local-ai-memory.h
     server-tools.cpp
     server-tools.h
 )
@@ -26,6 +30,11 @@ endif()
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+if(LOCAL_AI_STUDIO_SQLITE)
+    find_package(SQLite3 REQUIRED)
+    target_compile_definitions(${TARGET} PRIVATE LOCAL_AI_STUDIO_SQLITE=1)
+    target_link_libraries(${TARGET} PUBLIC SQLite3::SQLite3)
+endif()
 
 # llama-server-impl: server logic, reusable by app
 

@@ -225,6 +225,10 @@ int llama_server(int argc, char ** argv) {
     ctx_http.get ("/local-ai/kv-cache/:id_slot", ex_wrapper(routes.get_local_ai_kv_cache));
     ctx_http.post("/local-ai/kv-cache/:id_slot", ex_wrapper(routes.post_local_ai_kv_cache));
     ctx_http.del ("/local-ai/kv-cache/:id_slot", ex_wrapper(routes.delete_local_ai_kv_cache));
+    ctx_http.get ("/local-ai/memory/medium", ex_wrapper(routes.get_local_ai_medium_memory));
+    ctx_http.post("/local-ai/memory/medium", ex_wrapper(routes.post_local_ai_medium_memory));
+    ctx_http.post("/local-ai/memory/medium/search", ex_wrapper(routes.post_local_ai_medium_memory_search));
+    ctx_http.del ("/local-ai/memory/medium/:id", ex_wrapper(routes.delete_local_ai_medium_memory));
 
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();

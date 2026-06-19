@@ -4,6 +4,7 @@
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
+#include "local-ai-memory.h"
 
 #include "build-info.h"
 #include "common.h"
@@ -37,50 +38,6 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
-
-static std::string local_ai_kv_cache_db_path(const common_params & params) {
-    return params.slot_save_path + "local-ai-kv-cache.db.jsonl";
-}
-
-static int64_t local_ai_unix_time() {
-    return static_cast<int64_t>(std::time(nullptr));
-}
-
-static void local_ai_kv_cache_db_append(
-        const common_params & params,
-        const std::string & event,
-        int id_slot,
-        const std::string & filename,
-        size_t size_bytes) {
-    if (params.slot_save_path.empty()) {
-        return;
-    }
-    json record = {
-        {"event", event},
-        {"id_slot", id_slot},
-        {"filename", filename},
-        {"size_bytes", size_bytes},
-        {"updated_at_unix", local_ai_unix_time()},
-    };
-    std::ofstream db(local_ai_kv_cache_db_path(params), std::ios::app);
-    if (db.good()) {
-        db << record.dump() << "\n";
-    }
-}
-
-static json local_ai_kv_cache_metadata(const common_params & params, int id_slot, const std::string & filename) {
-    std::string filepath = params.slot_save_path + filename;
-    bool exists = std::filesystem::exists(filepath);
-    uintmax_t size_bytes = exists ? std::filesystem::file_size(filepath) : 0;
-    return {
-        {"id_slot", id_slot},
-        {"filename", filename},
-        {"exists", exists},
-        {"size_bytes", size_bytes},
-        {"db_path", local_ai_kv_cache_db_path(params)},
-        {"updated_at_unix", local_ai_unix_time()},
-    };
-}
 
 static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
@@ -4341,6 +4298,22 @@ void server_routes::init_routes() {
         return handle_local_ai_kv_cache_delete(req, id_slot);
     };
 
+    this->get_local_ai_medium_memory = [this](const server_http_req & req) {
+        return handle_local_ai_medium_memory_list(req);
+    };
+
+    this->post_local_ai_medium_memory = [this](const server_http_req & req) {
+        return handle_local_ai_medium_memory_upsert(req);
+    };
+
+    this->post_local_ai_medium_memory_search = [this](const server_http_req & req) {
+        return handle_local_ai_medium_memory_search(req);
+    };
+
+    this->delete_local_ai_medium_memory = [this](const server_http_req & req) {
+        return handle_local_ai_medium_memory_delete(req);
+    };
+
     this->get_props = [this](const server_http_req &) {
         auto res = create_response(true);
 
@@ -5027,7 +5000,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_ex
         return res;
     }
     if (req.get_param("metadata") == "1") {
-        res->ok(local_ai_kv_cache_metadata(params, id_slot, filename));
+        res->ok(local_ai_memory::kv_cache_metadata(params.slot_save_path, id_slot, filename));
         return res;
     }
 
@@ -5045,8 +5018,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_ex
             return res;
         }
         uintmax_t size_bytes = std::filesystem::file_size(filepath);
-        local_ai_kv_cache_db_append(params, "stored", id_slot, filename, static_cast<size_t>(size_bytes));
-        res->ok(local_ai_kv_cache_metadata(params, id_slot, filename));
+        res->ok(local_ai_memory::record_kv_event(params.slot_save_path, "stored", id_slot, filename, static_cast<size_t>(size_bytes)));
         return res;
     }
 
@@ -5060,9 +5032,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_ex
     res->content_type = "application/octet-stream";
     res->headers["X-Local-AI-KV-Cache-Filename"] = filename;
     res->headers["X-Local-AI-KV-Cache-Size"] = std::to_string(res->data.size());
-    res->headers["X-Local-AI-KV-Cache-DB"] = local_ai_kv_cache_db_path(params);
+    res->headers["X-Local-AI-KV-Cache-DB"] = local_ai_memory::db_path(params.slot_save_path);
     res->status = 200;
-    local_ai_kv_cache_db_append(params, "exported", id_slot, filename, res->data.size());
+    local_ai_memory::record_kv_event(params.slot_save_path, "exported", id_slot, filename, res->data.size());
     return res;
 }
 
@@ -5087,7 +5059,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_im
             res->error(format_error_response("Failed to write KV cache import file", ERROR_TYPE_SERVER));
             return res;
         }
-        local_ai_kv_cache_db_append(params, "imported", id_slot, filename, req.body.size());
+        local_ai_memory::record_kv_event(params.slot_save_path, "imported", id_slot, filename, req.body.size());
     } else if (!std::filesystem::exists(filepath)) {
         res->error(format_error_response("KV cache file does not exist", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5098,7 +5070,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_im
     auto restore_res = handle_slots_restore(restore_req, id_slot);
     if (restore_res->status == 200) {
         size_t size_bytes = std::filesystem::exists(filepath) ? static_cast<size_t>(std::filesystem::file_size(filepath)) : req.body.size();
-        local_ai_kv_cache_db_append(params, "restored", id_slot, filename, size_bytes);
+        local_ai_memory::record_kv_event(params.slot_save_path, "restored", id_slot, filename, size_bytes);
     }
     return restore_res;
 }
@@ -5122,9 +5094,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_de
             size_bytes = std::filesystem::file_size(filepath);
             file_deleted = std::filesystem::remove(filepath);
         }
-        local_ai_kv_cache_db_append(params, "deleted", id_slot, filename, static_cast<size_t>(size_bytes));
+        local_ai_memory::record_kv_event(params.slot_save_path, "deleted", id_slot, filename, static_cast<size_t>(size_bytes));
     } else {
-        local_ai_kv_cache_db_append(params, "erased", id_slot, "", 0);
+        local_ai_memory::record_kv_event(params.slot_save_path, "erased", id_slot, "", 0);
     }
 
     json body = json::parse(erase_res->data, nullptr, false);
@@ -5133,9 +5105,87 @@ std::unique_ptr<server_res_generator> server_routes::handle_local_ai_kv_cache_de
     }
     body["filename"] = filename;
     body["file_deleted"] = file_deleted;
-    body["db_path"] = local_ai_kv_cache_db_path(params);
+    body["db_path"] = local_ai_memory::db_path(params.slot_save_path);
     erase_res->ok(body);
     return erase_res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_local_ai_medium_memory_list(const server_http_req & req) {
+    auto res = create_response();
+    if (params.slot_save_path.empty()) {
+        res->error(format_error_response("This server does not support local AI memory. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+    const std::string owner_id = req.get_param("owner_id", "");
+    const int limit = std::max(1, std::min(100, std::atoi(req.get_param("limit", "20").c_str())));
+    const bool include_embedding = req.get_param("include_embedding", "0") == "1";
+    json result = local_ai_memory::medium_memory_list(params.slot_save_path, owner_id, limit, include_embedding);
+    if (!result.value("ok", false)) {
+        res->error(format_error_response(result.dump(), ERROR_TYPE_SERVER));
+        return res;
+    }
+    res->ok(result);
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_local_ai_medium_memory_upsert(const server_http_req & req) {
+    auto res = create_response();
+    if (params.slot_save_path.empty()) {
+        res->error(format_error_response("This server does not support local AI memory. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded()) {
+        res->error(format_error_response("Invalid JSON body", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    json result = local_ai_memory::medium_memory_upsert(params.slot_save_path, body);
+    if (!result.value("ok", false)) {
+        res->error(format_error_response(result.dump(), ERROR_TYPE_SERVER));
+        return res;
+    }
+    res->ok(result);
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_local_ai_medium_memory_search(const server_http_req & req) {
+    auto res = create_response();
+    if (params.slot_save_path.empty()) {
+        res->error(format_error_response("This server does not support local AI memory. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded()) {
+        res->error(format_error_response("Invalid JSON body", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    json result = local_ai_memory::medium_memory_search(params.slot_save_path, body);
+    if (!result.value("ok", false)) {
+        res->error(format_error_response(result.dump(), ERROR_TYPE_SERVER));
+        return res;
+    }
+    res->ok(result);
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_local_ai_medium_memory_delete(const server_http_req & req) {
+    auto res = create_response();
+    if (params.slot_save_path.empty()) {
+        res->error(format_error_response("This server does not support local AI memory. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+    const std::string id = req.get_param("id", "");
+    if (id.empty()) {
+        res->error(format_error_response("Missing memory id", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    json result = local_ai_memory::medium_memory_delete(params.slot_save_path, id);
+    if (!result.value("ok", false)) {
+        res->error(format_error_response(result.dump(), ERROR_TYPE_SERVER));
+        return res;
+    }
+    res->ok(result);
+    return res;
 }
 
 std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(const server_http_req & req, task_response_type res_type) {
