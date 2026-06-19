@@ -2332,10 +2332,6 @@ private:
                 } break;
             case SERVER_TASK_TYPE_SLOT_SAVE:
                 {
-                    if (!check_no_mtmd(task.id)) {
-                        break;
-                    }
-
                     const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
@@ -2349,13 +2345,18 @@ private:
                         break;
                     }
 
-                    const size_t token_count = slot->prompt.tokens.size();
+                    llama_tokens tokens;
+                    tokens.reserve(slot->prompt.tokens.size());
+                    for (size_t i = 0; i < slot->prompt.tokens.size(); ++i) {
+                        tokens.push_back(slot->prompt.tokens[i]);
+                    }
+                    const size_t token_count = tokens.size();
+
                     const int64_t t_start = ggml_time_us();
 
                     std::string filename = task.slot_action.filename;
                     std::string filepath = task.slot_action.filepath;
 
-                    const llama_tokens & tokens = slot->prompt.tokens.get_tokens();
                     const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
 
                     const int64_t t_end = ggml_time_us();
@@ -2373,7 +2374,6 @@ private:
                 } break;
             case SERVER_TASK_TYPE_SLOT_RESTORE:
                 {
-                    if (!check_no_mtmd(task.id)) break;
                     const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
@@ -2420,9 +2420,6 @@ private:
                 } break;
             case SERVER_TASK_TYPE_SLOT_ERASE:
                 {
-                    if (!check_no_mtmd(task.id)) {
-                        break;
-                    }
                     const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
