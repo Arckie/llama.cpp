@@ -124,7 +124,9 @@ CREATE TABLE IF NOT EXISTS medium_memories (
   created_at_unix INTEGER NOT NULL,
   updated_at_unix INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_kv_cache_events_slot_updated ON kv_cache_events(id_slot, updated_at_unix);
 CREATE INDEX IF NOT EXISTS idx_medium_memories_owner_state ON medium_memories(owner_id, state, updated_at_unix);
+CREATE INDEX IF NOT EXISTS idx_medium_memories_owner_conversation_scope_state ON medium_memories(owner_id, conversation_id, scope, state);
 )sql");
     return db;
 }
